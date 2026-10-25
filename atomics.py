@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
 ============================================================
-AtomICS - OT/ICS Recon & Assessment Console (v0.1)
+AtomICS - OT/ICS Recon & Assessment Console (v0.4.0)
 (formerly "OT RUNG"; originally the "Modbus Swiss Army Knife")
 
-Multi-protocol recon/assessment console. Opens with a menu:
-Network Discovery first, then a Protocol Modules submenu (Modbus,
-S7, EtherNet/IP, DNP3, BACnet, SNMP), then the Asset Register. Each module is loaded on demand and guards
+Multi-protocol recon/assessment console. Opens with a menu: Network Discovery
+first, then a Protocol Modules submenu (Modbus, S7, EtherNet/IP, DNP3, BACnet,
+SNMP, IEC 60870-5-104), then Auto-Fingerprint, then the Asset Register. Each
+module is loaded on demand and guards
 its own optional dependency so the rest of the tool keeps working
 if one package is missing.
 
-AtomICS starts in SAFE MODE. Two things are gated behind --active: writes
-(Modbus write/flip/zero/fuzz/hold), and active scans that transmit on the
-network (ARP, ICMP, SYN). Passive discovery - both the no-admin Broadcast/
-Multicast Listen and the promiscuous Listen, neither of which scans - and every
-read/poll stay available in safe mode. Passing
---active is the operator's opt-in, so in active mode writes run immediately
-(no per-write prompt); each one prints and logs a [write] line as a record.
+AtomICS starts in SAFE MODE. Two things are gated behind --active: writes and
+state-changing control (Modbus write/flip/zero/fuzz/hold; the S7 DB/M/Q writes
+and STOP/START; the IEC 104 C_SC/C_DC/C_SE commands), and active scans that
+transmit on the network (ARP, ICMP, SYN). Passive discovery - both the no-admin
+Broadcast/Multicast Listen and the promiscuous Listen, neither of which scans -
+the read-only auto-fingerprint, and every read/poll stay available in safe mode.
+Passing --active is the operator's opt-in, so in active mode writes run
+immediately (no per-write prompt), the one exception being the pre-existing S7
+STOP, which still asks for the target IP; each write prints and logs a [write]
+line as a record.
 
 !! DISCLAIMER !!
 For training/education or AUTHORIZED assessment ONLY, on systems you own or
@@ -31,6 +35,109 @@ Website  : https://mikeholcomb.com
 ------------------------------------------------------------
 CHANGELOG
 ------------------------------------------------------------
+v0.4.0 Auto-Fingerprint now LEVERAGES the SNMP response instead of only noting
+      that 161 answered. When the default community replies, it reads the
+      system group and folds the identity into the Asset Register: sysName ->
+      hostname, sysObjectID enterprise -> vendor (via a verified OT PEN map -
+      Siemens 4329, Schneider 3833, Hirschmann 248, plus the existing IT
+      vendors), and sysDescr (vendor/model/order code/firmware) -> the
+      versions column. It also flags the open default community as a finding.
+      snmp_summary() now RETURNS the fields it collected (screen output
+      unchanged), so the fingerprint reuses them with no extra queries; new
+      helper _snmp_vendor_name() maps a sysObjectID to a vendor name only when
+      the enterprise number is known. No menu, flag, or other output changed;
+      the probe stays read-only.
+v0.3.1 Two refinements.
+      * Auto-fingerprint renamed "Auto-Fingerprint" and moved on the MAIN MENU
+        from item 2 to item 3, directly above the Asset Register. Main menu is
+        now: 1 Network Discovery, 2 Protocol Modules, 3 Auto-Fingerprint,
+        4 Asset Register, 5 Help, 6 Exit (Protocol Modules returns to item 2).
+      * Input validation: every single-host target prompt - Auto-Fingerprint and
+        the Modbus/S7/DNP3/SNMP/IEC 104 modules, the BACnet device read, and a
+        non-blank EtherNet/IP target - now rejects a value that is neither a
+        valid IP address nor a resolvable hostname (e.g. a fat-fingered "asf")
+        with a plain-English message, instead of trying to scan it. New helper
+        _valid_target() parses an IP literal or asks the resolver; it sends
+        nothing to the target and accepts IP literals without a DNS lookup, so it
+        still works on an air-gapped segment.
+v0.3.0 Three capability additions.
+      * S7 module gained WRITE operations, matching the Modbus module: Write DB
+        (byte/word/dword/int16/real, or a single bit via read-modify-write),
+        Write M (flags) / Q (outputs), and START CPU (hot/cold) to pair with
+        STOP. All blocked in safe mode; in active mode they execute immediately
+        with a printed/logged [write] line, like Modbus writes. STOP keeps its
+        type-the-IP confirm. Writing Q FORCES a physical output and is flagged as
+        such. S7 MENU RENUMBERED: 9=Write DB, 10=Write M/Q, 11=STOP CPU (was 9),
+        12=START CPU, 13=Back (was 10).
+      * NEW IEC 60870-5-104 module under Protocol Modules (item 7; Back moved
+        7->8). Pure stdlib over TCP/2404: APCI I/S/U framing with N(S)/N(R),
+        STARTDT, General + Counter Interrogation, and decode of the common
+        monitored types (single/double point, normalized/scaled/float measured,
+        counters). Control (active mode only): single command C_SC_NA_1, double
+        command C_DC_NA_1, setpoints C_SE_NB_1/NC_1 - each with Select-Before-
+        Operate or direct-operate. Control operates real substation points and is
+        safe-mode-locked. Feeds the Asset Register. Reference IEC 60870-5-104/101.
+      * NEW read-only auto-fingerprint on the MAIN MENU (item 2): point it at one
+        IP; it connect-scans the OT service ports (502/102/44818/20000/2404) and
+        probes SNMP/161 + BACnet/47808, then runs each matching module's
+        read-only recon in a single pass and folds the result into the Asset
+        Register. Never writes or sends control, in any mode. MAIN MENU
+        RENUMBERED: Protocol Modules 2->3, Asset Register 3->4, Help 4->5,
+        Exit 5->6.
+v0.2.1 Docs: corrected the stale "Safe mode" source comment, which still
+      described the pre-v2.4 two-gate model (the write "restated in full ...
+      operator has to type YES ... applies even in active mode"). That per-write
+      YES gate was removed in v2.4 - active-mode writes execute immediately with
+      a printed/logged [write] audit line. The comment now matches
+      _confirm_write()'s real behaviour and notes the S7 STOP type-the-IP
+      exception. Comment-only: no code, menu, flag, or output behaviour changed.
+v0.2.0 S7 module: added "STOP CPU" (menu item 9) - issues an S7 RUN->STOP via
+      snap7 plc_stop(). State-changing, process-halting control action:
+      blocked in safe mode; in active mode it requires typing the target IP
+      to confirm, then prints/logs a [write] line. "Back to main menu" moved
+      from 9 to 10. The S7 module is no longer read-only; its safe-mode
+      notice was updated accordingly.
+v0.1.13 Modbus Utility submenu: removed the "Mode: SAFE/ACTIVE" suffix from
+      the Target line (the header already shows the mode); the line now
+      shows just the target IP:port. Cosmetic only.
+v0.1.12 Asset Register menu item 1 label shortened to "View register"
+      (parenthetical field list removed). Cosmetic only.
+v0.1.11 Protocol Modules submenu: removed the redundant "Mode: SAFE/ACTIVE"
+      line (the header already shows the mode).
+v0.1.10 Main menu item 4 renamed "Help / About" -> "Help" (help screen
+      header too). Help screen gained an "About" line: vibe-coded by Mike
+      Holcomb (UtilSec, LLC), link https://www.utilsec.com.
+v0.1.9 Startup banner: removed the "[i] OUI: N vendor prefixes loaded..."
+      status line (the database still loads; the no-file and parse-error
+      warnings remain). Dropped the now-orphaned blank line above the
+      closing rule. Added a blank line under the Asset Register summary.
+v0.1.8 All menu headers standardized to the main-menu format:
+      "=== AtomICS - <Name> (Safe Mode) ===" (or "(Active Mode)"), via a
+      new _menu_title() helper and a session-wide SESSION_READONLY flag.
+      Submenu headers changed from "--- ... ---" to "=== ... ===" and now
+      show the mode; "AtomICS SNMP Menu" gained the "-" separator. Added a
+      blank line under the Asset Register header. No menu numbering changed.
+v0.1.7 Safe-mode startup banner no longer prints the "MODE: SAFE - read-only
+      ..." block; safe mode now shows just the title and disclaimer. The
+      --active-overridden-by--readonly notice is kept (one line). Active
+      mode unchanged.
+v0.1.6 Disclaimer shortened to the essentials (authorization + not for
+      production). Startup banner no longer prints the disclaimer in
+      active mode; the ACTIVE-mode warning block is unchanged. Safe-mode
+      banner, --help epilog, and the Help screen still carry it.
+v0.1.5 Added main menu item "4. Help / About" (help_menu()), an in-tool
+      overview of the menus, safe/active mode, and CLI flags. Exit moved
+      from 4 to 5. Main menu header now shows the mode in parentheses:
+      "=== AtomICS - Main Menu (Safe Mode) ===" (or "(Active Mode)").
+v0.1.4 Main menu: header and mode line merged into one line, now
+      "=== AtomICS - Main Menu - Safe Mode ===" (or "Active Mode").
+      Cosmetic only.
+v0.1.3 Network Discovery menu: blank line added between the header and the
+      "This host:" address block. Cosmetic only.
+v0.1.2 Startup banner: blank line added between the local IP/subnet block and
+      the OUI database status line. Cosmetic only.
+v0.1.1 Main menu item 2 label shortened to "Protocol Modules" (protocol list
+      removed). Cosmetic only - numbering and behaviour unchanged.
 v0.1  Rebranded from OT RUNG to AtomICS. Last released as OT RUNG v3.4; this is a
       name/identity change only - no protocol behaviour, menu item, menu number,
       command-line flag, or output format changed from v3.4. The tool is now
@@ -342,12 +449,18 @@ LOG_FILE = None
 # Printed at startup. AtomICS touches live control-system protocols, so its use
 # is restricted to training and explicitly authorized assessments.
 DISCLAIMER = (
-    "DISCLAIMER: For training/education or AUTHORIZED assessment ONLY, on\n"
-    "systems you own or are explicitly permitted to test. This tool speaks\n"
-    "live OT/ICS protocols and MUST NOT be used in production or on any\n"
-    "network where safety and/or operational availability cannot be\n"
-    "guaranteed. You are solely responsible for how this tool is used."
+    "DISCLAIMER: For AUTHORIZED assessment or training ONLY, on systems you\n"
+    "own or have explicit permission to test. Not for production networks."
 )
+
+# Session-wide safe/active state, set in main(). True = safe default.
+SESSION_READONLY = True
+
+
+def _menu_title(name):
+    """Standard menu header: '=== AtomICS - <name> (Safe/Active Mode) ==='."""
+    mode = "(Safe Mode)" if SESSION_READONLY else "(Active Mode)"
+    return f"=== AtomICS - {name} {mode} ==="
 
 # Smart-scan tuning. Block sizes stay under the Modbus spec maximums (125 HRs, 2000 coils)
 # with margin for devices that quietly enforce smaller limits.
@@ -397,6 +510,9 @@ SNMP_ENTERPRISE_NAMES = {
     789: "NetApp", 2011: "Huawei", 2636: "Juniper Networks",
     3375: "F5 Networks", 4526: "Netgear", 8072: "net-snmp (Net-SNMP agent)",
     14988: "MikroTik", 25506: "H3C", 30065: "Arista Networks",
+    # OT / ICS vendors (verified against the IANA PEN registry) - the ones an
+    # ICS assessment is most likely to meet; extend as needed.
+    248: "Hirschmann (Belden)", 3833: "Schneider Electric", 4329: "Siemens",
 }
 
 # ------------------------ Port lists for Host Scanning ------------------------
@@ -685,12 +801,6 @@ def load_oui_database(verbose=True):
         return
     OUI_DB, OUI_DB_M, OUI_DB_S = db24, dbm, dbs
     OUI_SOURCE = path
-    if verbose:
-        total = len(db24) + len(dbm) + len(dbs)
-        extra = (f" (incl. {len(dbm)} MA-M + {len(dbs)} MA-S/IAB sub-blocks)"
-                 if (dbm or dbs) else "")
-        echo(f"[i] OUI: {total} vendor prefixes loaded from "
-             f"{os.path.basename(path)}{extra}.")
 
 
 # OUI download sources, tried in order. maclookup.app's consolidated CSV is the
@@ -977,9 +1087,11 @@ def asset_export_json():
 def asset_register_session():
     """Main-menu item 7: view and export the collected asset inventory."""
     while True:
-        print("\n--- AtomICS - Asset Register ---")
+        print("\n" + _menu_title("Asset Register"))
+        print("")
         print(f"    {_asset_summary_label()} collected this session (in memory only)")
-        print("1. View register (IP, ports, services/protocols, versioning)")
+        print("")
+        print("1. View register")
         print("2. Export to CSV")
         print("3. Export to JSON")
         print("4. Clear register")
@@ -1114,8 +1226,8 @@ def _print_local_ifaces(indent="  ", blank_after=True):
     """Print this host's current IPv4 address(es) and subnet mask(s).
 
     blank_after adds a trailing blank line so the address block is visually
-    separated from whatever follows it (a menu, a prompt). The startup banner
-    passes False because its "=" rule already provides the separation.
+    separated from whatever follows it (a menu, a prompt, the OUI status line).
+    Callers pass False where an "=" rule already provides the separation.
     """
     ifaces = _local_ipv4_interfaces()
     if not ifaces:
@@ -2829,7 +2941,8 @@ def network_discovery_session(args):
     readonly = getattr(args, "readonly", False)
     while True:
         lock = "   [LOCKED - safe mode]" if readonly else ""
-        print("\n--- AtomICS - Network Discovery ---")
+        print("\n" + _menu_title("Network Discovery"))
+        print("")
         _print_local_ifaces("    ", blank_after=False)
         if not SCAPY_AVAILABLE:
             print("    [scapy not detected: ARP unavailable; ICMP uses system ping;")
@@ -2951,15 +3064,20 @@ def _read_device_info(client):
 
 
 # ------------------------ Safe mode ------------------------
-# AtomICS launches read-only. Two gates stand between a keystroke and a value
-# landing in a live controller:
+# AtomICS launches read-only. Writes and state-changing actions are gated:
 #   1. --active must have been passed at launch, otherwise every write path
-#      refuses outright (_blocked_by_safe_mode below);
-#   2. the write is then restated in full - target and value - and the operator
-#      has to type YES. A bulk action names the whole range it will touch.
-# The second gate applies even in active mode. On a plant network the cost of a
-# mistaken write is measured in product, equipment or people, and an extra four
-# keystrokes is not a real cost against that.
+#      refuses outright (_blocked_by_safe_mode below). This is the operator's
+#      deliberate opt-in.
+#   2. In active mode writes then execute IMMEDIATELY - there is no per-write
+#      YES prompt (that gate was removed in v2.4). Each write instead prints
+#      and logs a one-line "[write] <target>=<value>" record, so there is an
+#      on-screen and on-disk trail of exactly what changed. That is a record,
+#      not a confirmation.
+# The exception is a whole-process action - e.g. S7 STOP CPU - which still
+# requires typing the target IP to confirm, because its blast radius is the
+# entire process rather than a single point. On a plant network the cost of a
+# mistaken write is measured in product, equipment or people; the audit trail
+# exists so a mistake can at least be reconstructed afterward.
 
 SAFE_MODE_BANNER = "SAFE MODE - read-only. Relaunch with --active to enable writes."
 
@@ -3554,20 +3672,43 @@ def _snmp_enterprise(objid):
     return objid
 
 
+def _snmp_vendor_name(objid):
+    """Return just the vendor NAME for a sysObjectID when its enterprise number
+    is known (e.g. '1.3.6.1.4.1.4329.x' -> 'Siemens'), else None. Used by
+    Auto-Fingerprint so it only fills the Asset Register vendor column with a
+    real name, never a bare 'unknown PEN' string."""
+    parts = objid.strip().lstrip(".").split(".")
+    if parts[:6] == ["1", "3", "6", "1", "4", "1"] and len(parts) > 6:
+        try:
+            pen = int(parts[6])
+        except ValueError:
+            return None
+        return SNMP_ENTERPRISE_NAMES.get(pen)
+    return None
+
+
 def snmp_summary(ip, community, mp_model, port, ver_label):
     """Quick recon banner - SNMP version, description, vendor/enterprise, engine time
-    and a few adjacent fields. Screen-only (a full dump is the option to save)."""
+    and a few adjacent fields. Screen-only (a full dump is the option to save).
+
+    Returns a dict {field label -> value} of whatever answered (plus an
+    "Enterprise" key for the decoded sysObjectID vendor), so callers such as
+    Auto-Fingerprint can fold the identity into the Asset Register without a
+    second round of queries."""
     echo(f"\n--- SNMP Summary: {ip}:{port} ---")
     echo(f" {'SNMP Version':<13}: v{ver_label}  (queried with RO '{community}')")
     log(f"SNMP_SUMMARY ip={ip} version={ver_label} ro={community}")
+    collected = {}
     for label, oid in SNMP_SUMMARY_OIDS:
         ok, res = snmp_get(ip, community, mp_model, oid, port)
         if not ok:
             echo(f" {label:<13}: (no response - {res})")
             log(f"SNMP_SUMMARY {label} FAIL {res}")
             continue
+        collected[label] = res
         if oid == SNMP_SYSOBJECTID_OID:
             display = _snmp_enterprise(res)
+            collected["Enterprise"] = display
             echo(f" {'Enterprise':<13}: {display}")
             echo(f" {'Object ID':<13}: {res}")
             log(f"SNMP_SUMMARY Enterprise={display} ObjectID={res}")
@@ -3575,6 +3716,7 @@ def snmp_summary(ip, community, mp_model, port, ver_label):
             echo(f" {label:<13}: {res}")
             log(f"SNMP_SUMMARY {label}={res}")
     echo("--- end ---")
+    return collected
 
 
 def snmp_full_dump(ip, community, mp_model, port):
@@ -3609,6 +3751,9 @@ def snmp_session(default_ip=None):
     if not ip:
         echo("No IP provided.")
         return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
     port_in = input(f"SNMP port [{SNMP_DEFAULT_PORT}]: ").strip()
     port = int(port_in) if port_in else SNMP_DEFAULT_PORT
 
@@ -3639,7 +3784,7 @@ def snmp_session(default_ip=None):
     # --- SNMP menu ---
     while True:
         ver_label = "1" if mp_model == 0 else "2c"
-        print("\n--- AtomICS SNMP Menu ---")
+        print("\n" + _menu_title("SNMP Menu"))
         print(f"    Target: {ip}:{port}  v{ver_label}  RO='{ro}'")
         print("1. Summary info (quick recon: version, description, enterprise, engine time)")
         print("2. Full SNMP dump to screen (option to save/log)")
@@ -3926,6 +4071,198 @@ def s7_recon(client, ip, rack, slot):
     echo(f"{BAR}\n")
 
 
+def s7_stop_cpu(client, ip, readonly):
+    """Issue an S7 STOP: transition the CPU from RUN to STOP.
+
+    The single most disruptive action in the tool. On a live PLC a STOP HALTS
+    the control program: the CPU stops solving logic and driving its outputs,
+    so the process it controls stops. Read-only by default - blocked in safe
+    mode. In active mode it still requires typing the target IP to confirm,
+    because the blast radius is the whole process, not a single register. This
+    is the standard S7 PG stop service (snap7 plc_stop()), not an exploit.
+    """
+    if readonly:
+        _blocked_by_safe_mode("S7 STOP CPU")
+        return
+    echo("\n[S7 STOP CPU]")
+    echo(f"  [!] This STOPs the CPU at {ip}. On a live PLC it HALTS the control")
+    echo("      program and the process it drives. Confirm you are authorized")
+    echo("      and that stopping this CPU is safe before continuing.")
+    typed = input(f"  Type the target IP ({ip}) to confirm STOP, anything else cancels: ").strip()
+    if typed != ip:
+        echo("  STOP cancelled.")
+        log("S7_STOP_CANCELLED")
+        return
+    echo(f"  [write] S7 STOP CPU at {ip}")
+    log(f"WRITE_EXECUTED S7_STOP ip={ip}")
+    try:
+        client.plc_stop()
+        echo("  [✓] STOP command sent. Use menu item 4 (CPU state) to confirm RUN->STOP.")
+        log("S7_STOP_SUCCESS")
+    except Exception as e:
+        echo(f"  [✗] STOP failed: {e}")
+        log(f"S7_STOP_ERROR {e}")
+
+
+def _s7_pack_value(dtype):
+    """Prompt for a value of the given scalar type; return (bytes, display) or (None, None).
+
+    S7 stores multi-byte values big-endian (Motorola order), so pack with '>'.
+    """
+    try:
+        if dtype == "b":
+            v = int(input("Value (byte 0-255): ").strip())
+            return bytes([v & 0xFF]), f"B:{v & 0xFF}"
+        if dtype == "w":
+            v = int(input("Value (word 0-65535): ").strip())
+            return struct.pack(">H", v & 0xFFFF), f"W:{v & 0xFFFF}"
+        if dtype == "d":
+            v = int(input("Value (dword 0-4294967295): ").strip())
+            return struct.pack(">I", v & 0xFFFFFFFF), f"D:{v & 0xFFFFFFFF}"
+        if dtype == "i":
+            v = int(input("Value (int16 -32768..32767): ").strip())
+            v = max(-32768, min(32767, v))
+            return struct.pack(">h", v), f"INT:{v}"
+        if dtype == "r":
+            v = float(input("Value (real/float): ").strip())
+            return struct.pack(">f", v), f"REAL:{v}"
+    except ValueError:
+        echo("Invalid value.")
+        return None, None
+    echo("Unknown type.")
+    return None, None
+
+
+def _s7_write_bit(read_byte, write_byte, label, ip):
+    """Read-modify-write a single bit so the other bits in the byte are preserved."""
+    try:
+        bit = int(input("Bit offset (0-7): ").strip())
+        val = 1 if int(input("Value (0 or 1): ").strip()) else 0
+    except ValueError:
+        echo("Invalid number.")
+        return
+    if not 0 <= bit <= 7:
+        echo("Bit offset must be 0-7.")
+        return
+    _confirm_write(f"{label}.{bit} = {val} at {ip}")
+    try:
+        cur = bytearray(read_byte())
+        if val:
+            cur[0] |= (1 << bit)
+        else:
+            cur[0] &= ~(1 << bit) & 0xFF
+        write_byte(cur)
+        echo(f"  [✓] {label}.{bit} set to {val}.")
+        log(f"S7_WRITE_BIT ok {label}.{bit}={val}")
+    except Exception as e:
+        echo(f"  [✗] bit write failed: {e}")
+        log(f"S7_WRITE_BIT error {e}")
+
+
+def s7_write_db(client, ip, readonly):
+    """Write a byte/word/dword/int/real or a single bit into a Data Block.
+
+    Blocked in safe mode. In active mode it runs immediately (Modbus model) and
+    prints/logs a [write] line. A DB holds the data the control program runs on,
+    so a wrong value here can change how the process behaves.
+    """
+    if readonly:
+        _blocked_by_safe_mode("S7 Write DB")
+        return
+    try:
+        db = int(input("DB number: ").strip())
+        start = int(input("Start byte: ").strip())
+    except ValueError:
+        echo("Invalid number.")
+        return
+    dtype = input("Type ([b]yte [w]ord [d]word [i]nt16 [r]eal b[t]=bit) [b]: ").strip().lower() or "b"
+    echo("  [!] Writing a live DB changes the data the PLC program runs on.")
+    if dtype == "t":
+        _s7_write_bit(lambda: client.db_read(db, start, 1),
+                      lambda b: client.db_write(db, start, b),
+                      f"DB{db}.DBX{start}", ip)
+        return
+    data, disp = _s7_pack_value(dtype)
+    if data is None:
+        return
+    _confirm_write(f"S7 DB{db} byte {start} = {disp} ({len(data)} byte(s)) at {ip}")
+    try:
+        client.db_write(db, start, bytearray(data))
+        echo(f"  [✓] Wrote {len(data)} byte(s) to DB{db} at byte {start}.")
+        log(f"S7_WRITE_DB ok db={db} start={start} value={disp}")
+    except Exception as e:
+        echo(f"  [✗] DB write failed: {e}")
+        log(f"S7_WRITE_DB error {e}")
+
+
+def s7_write_area(client, ip, readonly):
+    """Write to merkers/flags (M) or process outputs (Q). Blocked in safe mode.
+
+    Inputs (PE) are not writable here - they reflect field wiring. Writing Q
+    FORCES a physical output regardless of the control program, so it carries the
+    highest blast radius short of a STOP; it belongs on a simulator or bench unit.
+    """
+    if readonly:
+        _blocked_by_safe_mode("S7 Write Area")
+        return
+    area_in = input("Area ([m]erkers/MK flags, [q] outputs/PA) [m]: ").strip().lower() or "m"
+    area_map = {"m": "MK", "q": "PA", "o": "PA"}
+    area_name = area_map.get(area_in[0] if area_in else "")
+    if not area_name:
+        echo("Invalid area. (Inputs/PE reflect field wiring and are not writable.)")
+        return
+    if area_name == "PA":
+        echo("  [!] Writing Q FORCES a physical output (valve/motor/relay) ON the")
+        echo("      PLC regardless of its program. Simulator/bench only.")
+    try:
+        start = int(input("Start byte: ").strip())
+    except ValueError:
+        echo("Invalid number.")
+        return
+    dtype = input("Type ([b]yte [w]ord [d]word [i]nt16 [r]eal b[t]=bit) [b]: ").strip().lower() or "b"
+    if dtype == "t":
+        _s7_write_bit(lambda: client.read_area(_s7_area(area_name), 0, start, 1),
+                      lambda b: client.write_area(_s7_area(area_name), 0, start, b),
+                      f"{area_name} byte {start}", ip)
+        return
+    data, disp = _s7_pack_value(dtype)
+    if data is None:
+        return
+    _confirm_write(f"S7 {area_name} byte {start} = {disp} ({len(data)} byte(s)) at {ip}")
+    try:
+        client.write_area(_s7_area(area_name), 0, start, bytearray(data))
+        echo(f"  [✓] Wrote {len(data)} byte(s) to {area_name} at byte {start}.")
+        log(f"S7_WRITE_AREA ok area={area_name} start={start} value={disp}")
+    except Exception as e:
+        echo(f"  [✗] area write failed: {e}")
+        log(f"S7_WRITE_AREA error {e}")
+
+
+def s7_start_cpu(client, ip, readonly):
+    """Issue an S7 START (STOP->RUN). Blocked in safe mode; immediate in active mode.
+
+    Pairs with STOP CPU. A hot start resumes; a cold start reinitialises. Starting
+    a CPU re-energises the process it controls - make sure that is safe first.
+    """
+    if readonly:
+        _blocked_by_safe_mode("S7 START CPU")
+        return
+    mode = input("Start type ([h]ot = resume, [c]old = full restart) [h]: ").strip().lower() or "h"
+    cold = mode.startswith("c")
+    echo(f"  [!] START re-energises the process controlled by {ip}. Confirm it is safe.")
+    _confirm_write(f"S7 START CPU ({'cold' if cold else 'hot'}) at {ip}")
+    try:
+        if cold:
+            client.plc_cold_start()
+        else:
+            client.plc_hot_start()
+        echo("  [✓] START command sent. Use CPU state to confirm STOP->RUN.")
+        log(f"S7_START_SUCCESS mode={'cold' if cold else 'hot'}")
+    except Exception as e:
+        echo(f"  [✗] START failed: {e}")
+        log(f"S7_START_ERROR {e}")
+
+
 def s7_session(args):
     """Interactive S7comm module: connect (rack/slot or auto-probe) then menu."""
     if not S7_AVAILABLE:
@@ -3940,6 +4277,9 @@ def s7_session(args):
     ip = args.ip or input("Enter target S7 PLC IP: ").strip()
     if not ip:
         echo("No IP provided.")
+        return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
         return
     port_in = input(f"S7 port [{S7_DEFAULT_PORT}]: ").strip()
     port = int(port_in) if port_in else S7_DEFAULT_PORT
@@ -3964,15 +4304,17 @@ def s7_session(args):
 
     echo(f"[✓] Connected to S7 at {ip}:{port} (rack {rack}, slot {slot})")
     if args.readonly:
-        echo("[!] Read-Only Mode ENABLED (S7 module is read-only by design)")
+        echo("[!] SAFE mode: S7 writes (DB / M / Q) and STOP/START are blocked. "
+             "Relaunch with --active to enable them.")
     log(f"S7_CONNECTED ip={ip} rack={rack} slot={slot}")
     asset_update(ip, ports={port: "S7comm / ISO-TSAP (Siemens)"},
                  protocol="S7comm", vendor="Siemens", source="S7")
 
     try:
         while True:
-            print("\n--- AtomICS - S7comm (Siemens) Menu ---")
+            print("\n" + _menu_title("S7comm (Siemens) Menu"))
             print(f"    Target: {ip}:{port}  rack {rack} slot {slot}")
+            lock = "   [LOCKED - safe mode]" if args.readonly else ""
             print("1. Recon overview (identity, order code, state, protection, blocks)")
             print("2. CPU info (module type, serial, AS name)")
             print("3. Order code / firmware")
@@ -3981,7 +4323,11 @@ def s7_session(args):
             print("6. Block inventory (OB/FB/FC/DB counts)")
             print("7. Read a Data Block (DB)")
             print("8. Read I/Q/M area")
-            print("9. Back to main menu")
+            print(f"9. Write a Data Block (DB){lock}")
+            print(f"10. Write M (flags) / Q (outputs){lock}")
+            print(f"11. STOP CPU (RUN->STOP) - halts the controlled process{lock}")
+            print(f"12. START CPU (STOP->RUN){lock}")
+            print("13. Back to main menu")
             choice = input("\nSelect an option: ").strip()
             try:
                 if choice == "1":
@@ -4001,6 +4347,14 @@ def s7_session(args):
                 elif choice == "8":
                     s7_read_area(client)
                 elif choice == "9":
+                    s7_write_db(client, ip, args.readonly)
+                elif choice == "10":
+                    s7_write_area(client, ip, args.readonly)
+                elif choice == "11":
+                    s7_stop_cpu(client, ip, args.readonly)
+                elif choice == "12":
+                    s7_start_cpu(client, ip, args.readonly)
+                elif choice == "13":
                     break
                 else:
                     echo("Invalid option.")
@@ -4435,6 +4789,9 @@ def enip_recon(ip, port):
 def enip_session(args):
     """Interactive EtherNet/IP module: identify and enumerate CIP devices."""
     ip = args.ip or input("Enter target EtherNet/IP device IP (blank for UDP discovery): ").strip()
+    if ip and not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
     port_in = input(f"EtherNet/IP port [{ENIP_DEFAULT_PORT}]: ").strip()
     port = int(port_in) if port_in else ENIP_DEFAULT_PORT
     if args.readonly:
@@ -4442,7 +4799,7 @@ def enip_session(args):
     log(f"ENIP_SESSION ip={ip} port={port}")
 
     while True:
-        print("\n--- AtomICS - EtherNet/IP (CIP) Menu ---")
+        print("\n" + _menu_title("EtherNet/IP (CIP) Menu"))
         print(f"    Target: {ip or '(none - use discovery)'}:{port}")
         print("1. Recon overview (ListIdentity + ListServices)")
         print("2. ListIdentity (vendor / product / revision / serial / state)")
@@ -4819,6 +5176,9 @@ def dnp3_session(args):
     if not ip:
         echo("No IP provided.")
         return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
     port_in = input(f"DNP3 port [{DNP3_DEFAULT_PORT}]: ").strip()
     port = int(port_in) if port_in else DNP3_DEFAULT_PORT
 
@@ -4838,7 +5198,7 @@ def dnp3_session(args):
     dnp3_link_status(ip, port, dest, src)
 
     while True:
-        print("\n--- AtomICS - DNP3 (IEEE 1815) Menu ---")
+        print("\n" + _menu_title("DNP3 (IEEE 1815) Menu"))
         print(f"    Target: {ip}:{port}  outstation={dest} master={src}")
         print("1. Request link status (confirm outstation)")
         print("2. Integrity poll (Class 1/2/3/0)")
@@ -4869,6 +5229,470 @@ def dnp3_session(args):
         except Exception as e:
             echo(f"Operation failed: {e}")
             log(f"DNP3_ERROR {e}")
+
+
+# ============================================================
+#  IEC 60870-5-104 MODULE (pure-Python, TCP/2404)
+# ============================================================
+# IEC 60870-5-104 (IEC 104) carries IEC 60870-5-101 ASDUs over TCP/2404 - the
+# telecontrol protocol of European-style electricity transmission/distribution
+# SCADA. Like the DNP3 module there is no mature, easily-installed pure-Python
+# stack, so this speaks the wire protocol directly:
+#   - APCI: the 6-byte control field with its three frame formats (I = numbered
+#     information, S = supervisory ack, U = unnumbered STARTDT/STOPDT/TESTFR) and
+#     the send/receive sequence numbers N(S)/N(R).
+#   - ASDU: type id, variable structure qualifier, cause of transmission, common
+#     address, and the information object(s).
+# Read path: STARTDT, then General Interrogation (C_IC_NA_1) and Counter
+# Interrogation (C_CI_NA_1) to enumerate the outstation's points, decoding the
+# common monitored types. Control path (active mode only): single command
+# (C_SC_NA_1), double command (C_DC_NA_1) and setpoints (C_SE_NB/NC), each with
+# Select-Before-Operate (select -> await ActCon -> execute) or direct-operate.
+# Control commands operate real substation points - breakers, isolators,
+# regulators - so they are safe-mode-locked like every other write in AtomICS.
+# Reference: IEC 60870-5-104 and IEC 60870-5-101.
+#
+# Sequence-number handling is deliberately minimal for a recon/assessment client:
+# N(S)/N(R) are tracked and one S-frame acknowledges a received batch. It does
+# not run the full k/w flow-control windows a permanent master would. Multi-byte
+# fields in the information objects are little-endian.
+
+IEC104_DEFAULT_PORT = 2404
+IEC104_START = 0x68
+
+# ASDU type IDs (subset relevant to recon + control).
+IEC104_TYPES = {
+    1: "M_SP_NA_1 single-point", 3: "M_DP_NA_1 double-point",
+    5: "M_ST_NA_1 step position", 7: "M_BO_NA_1 bitstring",
+    9: "M_ME_NA_1 measured normalized", 11: "M_ME_NB_1 measured scaled",
+    13: "M_ME_NC_1 measured short float", 15: "M_IT_NA_1 integrated totals",
+    30: "M_SP_TB_1 single-point w/time", 31: "M_DP_TB_1 double-point w/time",
+    36: "M_ME_TF_1 short float w/time",
+    45: "C_SC_NA_1 single command", 46: "C_DC_NA_1 double command",
+    47: "C_RC_NA_1 regulating step", 48: "C_SE_NA_1 setpoint normalized",
+    49: "C_SE_NB_1 setpoint scaled", 50: "C_SE_NC_1 setpoint short float",
+    100: "C_IC_NA_1 interrogation", 101: "C_CI_NA_1 counter interrogation",
+    103: "C_CS_NA_1 clock sync",
+}
+
+# Cause of transmission (subset).
+IEC104_COT = {
+    1: "periodic", 2: "background", 3: "spontaneous", 4: "initialized",
+    5: "request", 6: "activation", 7: "activation confirmation",
+    8: "deactivation", 9: "deactivation confirmation",
+    10: "activation termination", 20: "interrogated by station",
+    37: "interrogated by counter", 44: "unknown type id",
+    45: "unknown cause", 46: "unknown common address", 47: "unknown IOA",
+}
+
+# Information-element length in bytes, keyed by type id (object body minus the
+# 3-byte IOA). Time-tagged variants include the 7-byte CP56Time2a.
+IEC104_ELEM_LEN = {
+    1: 1, 3: 1, 5: 2, 7: 5, 9: 3, 11: 3, 13: 5, 15: 5,
+    30: 8, 31: 8, 36: 12,
+}
+
+
+def _iec104_u_frame(oct1):
+    """A U-format APDU (STARTDT/STOPDT/TESTFR act/con)."""
+    return bytes([IEC104_START, 0x04, oct1, 0x00, 0x00, 0x00])
+
+
+def _iec104_build_asdu(tid, cot, ca, ioa, elements, vsq=0x01, orig=0, test=0, pn=0):
+    """Assemble one ASDU with a single information object (SQ=0, count in vsq)."""
+    cot_byte = (cot & 0x3F) | ((pn & 1) << 6) | ((test & 1) << 7)
+    return (bytes([tid, vsq, cot_byte, orig]) + struct.pack("<H", ca) +
+            bytes([ioa & 0xFF, (ioa >> 8) & 0xFF, (ioa >> 16) & 0xFF]) + elements)
+
+
+def _iec104_decode_elem(tid, raw):
+    """Best-effort decode of one information element to a readable value string."""
+    try:
+        if tid in (1, 30):            # SIQ (single-point + quality)
+            siq = raw[0]
+            return f"SP={siq & 1}" + (" [invalid]" if siq & 0x80 else "")
+        if tid in (3, 31):            # DIQ (double-point + quality)
+            names = {0: "intermediate", 1: "OFF", 2: "ON", 3: "indeterminate"}
+            return f"DP={names.get(raw[0] & 0x03)}" + (" [invalid]" if raw[0] & 0x80 else "")
+        if tid == 5:                  # VTI step position
+            v = raw[0] & 0x7F
+            if v & 0x40:
+                v -= 128
+            return f"step={v}"
+        if tid == 7:                  # bitstring
+            return f"bits=0x{struct.unpack('<I', raw[0:4])[0]:08x}"
+        if tid == 9:                  # normalized
+            return f"norm={struct.unpack('<h', raw[0:2])[0] / 32768.0:.4f}"
+        if tid == 11:                 # scaled
+            return f"scaled={struct.unpack('<h', raw[0:2])[0]}"
+        if tid in (13, 36):           # short float
+            return f"float={struct.unpack('<f', raw[0:4])[0]:.4f}"
+        if tid == 15:                 # integrated total (BCR)
+            return f"counter={struct.unpack('<i', raw[0:4])[0]}"
+    except Exception:
+        pass
+    return "0x" + bytes(raw).hex()
+
+
+def _iec104_parse_asdu(asdu):
+    """Parse an ASDU into a dict: tid/cot/ca/objs. Handles SQ=0 and SQ=1."""
+    if len(asdu) < 6:
+        return None
+    tid = asdu[0]
+    vsq = asdu[1]
+    sq = (vsq >> 7) & 1
+    n = vsq & 0x7F
+    cot = asdu[2] & 0x3F
+    test = (asdu[2] >> 7) & 1
+    pn = (asdu[2] >> 6) & 1
+    ca = struct.unpack("<H", asdu[4:6])[0]
+    body = asdu[6:]
+    elen = IEC104_ELEM_LEN.get(tid)
+    objs = []
+    try:
+        if sq == 0:
+            off = 0
+            for _ in range(n):
+                if off + 3 > len(body):
+                    break
+                ioa = body[off] | (body[off + 1] << 8) | (body[off + 2] << 16)
+                off += 3
+                if elen is None:
+                    objs.append((ioa, "0x" + bytes(body[off:]).hex()))
+                    break
+                objs.append((ioa, _iec104_decode_elem(tid, body[off:off + elen])))
+                off += elen
+        else:
+            base = body[0] | (body[1] << 8) | (body[2] << 16)
+            off = 3
+            for k in range(n):
+                if elen is None or off + elen > len(body):
+                    break
+                objs.append((base + k, _iec104_decode_elem(tid, body[off:off + elen])))
+                off += elen
+    except Exception:
+        pass
+    return {"tid": tid, "cot": cot, "test": test, "pn": pn, "ca": ca,
+            "n": n, "sq": sq, "objs": objs}
+
+
+class _Iec104Conn:
+    """A minimal IEC 104 controlling-station connection (APCI + I/S/U framing)."""
+
+    def __init__(self, ip, port, common_addr, timeout=4.0):
+        self.ip = ip
+        self.port = port
+        self.ca = common_addr
+        self.timeout = timeout
+        self.ns = 0           # our send sequence number
+        self.nr = 0           # next I-frame sequence we expect from the outstation
+        self.sock = None
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect((self.ip, self.port))
+
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+    def _recv_exact(self, n):
+        buf = b""
+        while len(buf) < n:
+            try:
+                chunk = self.sock.recv(n - len(buf))
+            except socket.timeout:
+                return None
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+
+    def _recv_apdu(self):
+        hdr = self._recv_exact(2)
+        if not hdr or hdr[0] != IEC104_START:
+            return None
+        body = self._recv_exact(hdr[1])
+        if body is None or len(body) < 4:
+            return None
+        c = body[:4]
+        if (c[0] & 0x01) == 0:                      # I-format
+            self.nr = (self.nr + 1) & 0x7FFF
+            return {"fmt": "I", "asdu": body[4:]}
+        if (c[0] & 0x03) == 0x01:                    # S-format
+            return {"fmt": "S"}
+        return {"fmt": "U", "oct1": c[0]}            # U-format
+
+    def _send_s(self):
+        self.sock.sendall(bytes([IEC104_START, 0x04, 0x01, 0x00,
+                                 (self.nr << 1) & 0xFF, (self.nr >> 7) & 0xFF]))
+
+    def send_i(self, asdu):
+        ctrl = bytes([(self.ns << 1) & 0xFF, (self.ns >> 7) & 0xFF,
+                      (self.nr << 1) & 0xFF, (self.nr >> 7) & 0xFF])
+        self.sock.sendall(bytes([IEC104_START, len(ctrl) + len(asdu)]) + ctrl + asdu)
+        self.ns = (self.ns + 1) & 0x7FFF
+
+    def startdt(self):
+        self.sock.sendall(_iec104_u_frame(0x07))     # STARTDT act
+        apdu = self._recv_apdu()
+        return bool(apdu) and apdu["fmt"] == "U"      # expect STARTDT con (0x0B)
+
+    def stopdt(self):
+        try:
+            self.sock.sendall(_iec104_u_frame(0x13))  # STOPDT act (politeness on exit)
+        except Exception:
+            pass
+
+    def recv_asdus(self, max_apdus=300):
+        """Collect I-frame ASDUs until ActTerm, a quiet gap, or max_apdus; then ack."""
+        out = []
+        for _ in range(max_apdus):
+            apdu = self._recv_apdu()
+            if apdu is None:
+                break
+            if apdu["fmt"] != "I":
+                continue
+            out.append(apdu["asdu"])
+            parsed = _iec104_parse_asdu(apdu["asdu"])
+            if parsed and parsed["cot"] == 10:        # activation termination
+                break
+        if out:
+            self._send_s()
+        return out
+
+
+def _iec104_show_asdus(asdus, ip, feed_assets=True):
+    """Print parsed ASDUs and (optionally) record the point count in the register."""
+    points = 0
+    for raw in asdus:
+        p = _iec104_parse_asdu(raw)
+        if not p:
+            continue
+        tname = IEC104_TYPES.get(p["tid"], f"type {p['tid']}")
+        cname = IEC104_COT.get(p["cot"], str(p["cot"]))
+        echo(f"  {tname}  [cot={cname}, CA={p['ca']}, {p['n']} obj]")
+        for ioa, val in p["objs"]:
+            points += 1
+            echo(f"      IOA {ioa}: {val}")
+        log(f"IEC104_ASDU tid={p['tid']} cot={p['cot']} ca={p['ca']} n={p['n']}")
+    if feed_assets and points:
+        asset_update(ip, protocol="IEC 104",
+                     version=f"IEC104: {points} point(s) enumerated", source="IEC104")
+    return points
+
+
+def iec104_interrogation(conn, ip):
+    """General Interrogation (C_IC_NA_1, QOI=20 station)."""
+    echo("\n[IEC104 General Interrogation]")
+    log("IEC104_GI send")
+    conn.send_i(_iec104_build_asdu(100, 6, conn.ca, 0, bytes([20])))
+    asdus = conn.recv_asdus()
+    if not asdus:
+        echo("  (no response)")
+        return
+    n = _iec104_show_asdus(asdus, ip)
+    echo(f"  -- {n} monitored point(s) --")
+
+
+def iec104_counter_interrogation(conn, ip):
+    """Counter Interrogation (C_CI_NA_1, QCC=5 general request, read/no freeze)."""
+    echo("\n[IEC104 Counter Interrogation]")
+    log("IEC104_CI send")
+    conn.send_i(_iec104_build_asdu(101, 6, conn.ca, 0, bytes([0x05])))
+    asdus = conn.recv_asdus()
+    if not asdus:
+        echo("  (no response)")
+        return
+    n = _iec104_show_asdus(asdus, ip)
+    echo(f"  -- {n} counter value(s) --")
+
+
+def _iec104_send_cmd(conn, tid, ioa, element, label):
+    """Send a command ASDU (COT=6 activation) and report the confirmation.
+
+    Returns (ok, message): ok True on positive ActCon, False on negative/other,
+    None if no confirmation arrived.
+    """
+    log(f"IEC104_CMD send {label} tid={tid} ioa={ioa}")
+    conn.send_i(_iec104_build_asdu(tid, 6, conn.ca, ioa, element))
+    for raw in conn.recv_asdus(max_apdus=20):
+        p = _iec104_parse_asdu(raw)
+        if not p or p["tid"] != tid:
+            continue
+        if p["cot"] == 7:                         # activation confirmation
+            return (p["pn"] == 0,
+                    "ActCon positive" if p["pn"] == 0 else "ActCon NEGATIVE (rejected)")
+        if p["cot"] == 10:                        # activation termination
+            return (True, "ActTerm")
+        if p["cot"] in (44, 45, 46, 47):
+            return (False, IEC104_COT.get(p["cot"]))
+    return (None, "no confirmation received")
+
+
+def _iec104_run_command(conn, ip, tid, ioa, elem_select, elem_execute, label, readonly):
+    """Shared control flow: Select-Before-Operate or direct-operate."""
+    if readonly:
+        _blocked_by_safe_mode(f"IEC 104 {label}")
+        return
+    direct = (input("Mode ([s]elect-before-operate, [d]irect-operate) [s]: ")
+              .strip().lower() or "s").startswith("d")
+    echo(f"  [!] {label} operates a real control point (breaker/isolator/regulator)")
+    echo("      on the outstation. Simulator/bench or authorized gear only.")
+    _confirm_write(f"IEC104 {label} IOA={ioa} ({'direct' if direct else 'SBO'}) at {ip}")
+    if not direct:
+        ok, msg = _iec104_send_cmd(conn, tid, ioa, elem_select, f"{label} select")
+        echo(f"  select : {msg}")
+        if ok is not True:
+            echo("  [x] Select not confirmed - execute aborted.")
+            log(f"IEC104_{label}_SELECT_FAIL ioa={ioa} {msg}")
+            return
+    ok, msg = _iec104_send_cmd(conn, tid, ioa, elem_execute, f"{label} execute")
+    echo(f"  execute: {msg}")
+    log(f"IEC104_{label}_EXECUTE ioa={ioa} result={msg}")
+
+
+def iec104_single_command(conn, ip, readonly):
+    """C_SC_NA_1 single command (open/close a single point)."""
+    if readonly:
+        _blocked_by_safe_mode("IEC 104 single command (C_SC)")
+        return
+    try:
+        ioa = int(input("Information object address (IOA): ").strip())
+    except ValueError:
+        echo("Invalid IOA.")
+        return
+    scs = 1 if input("Command ([c]lose/on, [o]pen/off): ").strip().lower().startswith("c") else 0
+    sel = bytes([(scs & 1) | (1 << 7)])   # S/E = 1 (select)
+    exe = bytes([(scs & 1)])              # S/E = 0 (execute)
+    _iec104_run_command(conn, ip, 45, ioa, sel, exe,
+                        f"C_SC->{'CLOSE/ON' if scs else 'OPEN/OFF'}", readonly)
+
+
+def iec104_double_command(conn, ip, readonly):
+    """C_DC_NA_1 double command (DCS 1=off/open, 2=on/close)."""
+    if readonly:
+        _blocked_by_safe_mode("IEC 104 double command (C_DC)")
+        return
+    try:
+        ioa = int(input("Information object address (IOA): ").strip())
+    except ValueError:
+        echo("Invalid IOA.")
+        return
+    dcs = 2 if input("Command ([c]lose/on, [o]pen/off): ").strip().lower().startswith("c") else 1
+    sel = bytes([(dcs & 0x03) | (1 << 7)])
+    exe = bytes([(dcs & 0x03)])
+    _iec104_run_command(conn, ip, 46, ioa, sel, exe,
+                        f"C_DC->{'CLOSE/ON' if dcs == 2 else 'OPEN/OFF'}", readonly)
+
+
+def iec104_setpoint(conn, ip, readonly):
+    """C_SE_NB_1 (scaled int16) or C_SE_NC_1 (short float) setpoint."""
+    if readonly:
+        _blocked_by_safe_mode("IEC 104 setpoint (C_SE)")
+        return
+    try:
+        ioa = int(input("Information object address (IOA): ").strip())
+    except ValueError:
+        echo("Invalid IOA.")
+        return
+    kind = input("Setpoint type ([f]loat/C_SE_NC, [s]caled int/C_SE_NB) [f]: ").strip().lower() or "f"
+    try:
+        if kind.startswith("s"):
+            val = max(-32768, min(32767, int(input("Scaled value (-32768..32767): ").strip())))
+            payload = struct.pack("<h", val)
+            tid = 49
+        else:
+            val = float(input("Float value: ").strip())
+            payload = struct.pack("<f", val)
+            tid = 50
+    except ValueError:
+        echo("Invalid value.")
+        return
+    sel = payload + bytes([1 << 7])   # QOS S/E = 1 (select)
+    exe = payload + bytes([0x00])     # QOS S/E = 0 (execute)
+    _iec104_run_command(conn, ip, tid, ioa, sel, exe, f"C_SE={val}", readonly)
+
+
+def iec104_session(args):
+    """Interactive IEC 60870-5-104 module: STARTDT, then interrogate or command."""
+    ip = args.ip or input("Enter target IEC 104 IP: ").strip()
+    if not ip:
+        echo("No IP provided.")
+        return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
+    port_in = input(f"IEC 104 port [{IEC104_DEFAULT_PORT}]: ").strip()
+    port = int(port_in) if port_in else IEC104_DEFAULT_PORT
+    try:
+        ca = int(input("Common ASDU address [1]: ").strip() or "1")
+    except ValueError:
+        echo("Invalid address.")
+        return
+
+    if args.readonly:
+        echo("[!] SAFE mode: IEC 104 control commands (C_SC / C_DC / C_SE) are blocked. "
+             "Relaunch with --active to enable them.")
+    conn = _Iec104Conn(ip, port, ca)
+    try:
+        conn.connect()
+    except Exception as e:
+        echo(f"[x] Could not connect to {ip}:{port}: {e}")
+        log(f"IEC104_CONNECT_FAIL ip={ip} {e}")
+        return
+    if not conn.startdt():
+        echo("[x] STARTDT not confirmed - port open but no IEC 104 response.")
+        conn.close()
+        return
+    echo(f"[check] IEC 104 data transfer started with {ip}:{port} (CA={ca})")
+    asset_update(ip, ports={port: "IEC 60870-5-104"}, protocol="IEC 104", source="IEC104")
+    log(f"IEC104_STARTDT_OK ip={ip} port={port} ca={ca}")
+
+    try:
+        while True:
+            print("\n" + _menu_title("IEC 60870-5-104 Menu"))
+            print(f"    Target: {ip}:{port}  CA={ca}")
+            lock = "   [LOCKED - safe mode]" if args.readonly else ""
+            print("1. General interrogation (enumerate monitored points)")
+            print("2. Counter interrogation (integrated totals)")
+            print(f"3. Single command C_SC (open/close a point){lock}")
+            print(f"4. Double command C_DC (open/close a point){lock}")
+            print(f"5. Setpoint command C_SE (analog){lock}")
+            print("6. Change common address")
+            print("7. Back to main menu")
+            choice = input("\nSelect an option: ").strip()
+            try:
+                if choice == "1":
+                    iec104_interrogation(conn, ip)
+                elif choice == "2":
+                    iec104_counter_interrogation(conn, ip)
+                elif choice == "3":
+                    iec104_single_command(conn, ip, args.readonly)
+                elif choice == "4":
+                    iec104_double_command(conn, ip, args.readonly)
+                elif choice == "5":
+                    iec104_setpoint(conn, ip, args.readonly)
+                elif choice == "6":
+                    ca = int(input("Common ASDU address [1]: ").strip() or "1")
+                    conn.ca = ca
+                    echo(f"[i] Common address set to {ca}.")
+                elif choice == "7":
+                    break
+                else:
+                    echo("Invalid option.")
+            except ValueError:
+                echo("Invalid number.")
+            except Exception as e:
+                echo(f"Operation failed: {e}")
+                log(f"IEC104_ERROR {e}")
+    finally:
+        conn.stopdt()
+        conn.close()
+        log("IEC104_DISCONNECTED")
 
 
 # ============================================================
@@ -5060,6 +5884,9 @@ def bacnet_read_device(port):
     if not ip:
         echo("No IP provided.")
         return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
     try:
         inst = int(input("Device instance number: ").strip())
     except ValueError:
@@ -5106,7 +5933,7 @@ def bacnet_session(args):
     log(f"BACNET_SESSION port={port}")
 
     while True:
-        print("\n--- AtomICS - BACnet/IP Menu ---")
+        print("\n" + _menu_title("BACnet/IP Menu"))
         print("1. Who-Is broadcast (discover all devices on the subnet)")
         print("2. Who-Is to a specific IP/subnet-broadcast")
         print("3. Read device properties (name/vendor/model/firmware)")
@@ -5135,9 +5962,8 @@ def show_menu(client, readonly, target_ip, target_port):
     # the tool is capable of without discovering it by accident.
     lock = "   [LOCKED - safe mode]" if readonly else ""
     while True:
-        print("\n--- AtomICS - Modbus Utility Menu ---")
-        print(f"    Target: {target_ip}:{target_port}   Mode: "
-              + ("SAFE (read-only)" if readonly else "ACTIVE (writes enabled)"))
+        print("\n" + _menu_title("Modbus Utility Menu"))
+        print(f"    Target: {target_ip}:{target_port}")
         print("1.  Read Coils")
         print(f"2.  Write Coil{lock}")
         print("3.  Read Registers")
@@ -5200,6 +6026,9 @@ def modbus_flow(args):
     if not ip:
         echo("No IP provided.")
         return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        return
     client = connect_to_modbus(ip, readonly=args.readonly)
     if client:
         # A successful connect confirms Modbus/502 on this host.
@@ -5220,16 +6049,15 @@ def protocol_modules_menu(args):
     collects what every module learns).
     """
     while True:
-        print("\n--- AtomICS - Protocol Modules ---")
-        print("    Mode: " + ("SAFE (read-only)" if args.readonly
-                              else "ACTIVE (writes enabled)"))
+        print("\n" + _menu_title("Protocol Modules"))
         print("1. Modbus")
         print("2. S7 (Siemens)")
         print("3. EtherNet/IP (CIP)")
         print("4. DNP3")
         print("5. BACnet")
         print("6. SNMP")
-        print("7. Back to main menu")
+        print("7. IEC 60870-5-104")
+        print("8. Back to main menu")
         choice = input("\nSelect an option: ").strip()
 
         if choice == "1":
@@ -5245,21 +6073,307 @@ def protocol_modules_menu(args):
         elif choice == "6":
             snmp_session(default_ip=args.ip)
         elif choice == "7":
+            iec104_session(args)
+        elif choice == "8":
             break
         else:
             echo("Invalid option.")
 
 
+def help_menu(args):
+    """Show an overview of what AtomICS does and how each menu is used."""
+    readonly = getattr(args, "readonly", False)
+    mode = "SAFE (read-only)" if readonly else "ACTIVE (writes enabled)"
+    lines = [
+        "",
+        _menu_title("Help"),
+        "",
+        "AtomICS (OT/ICS Recon & Assessment Console) is a menu-driven,",
+        "multi-protocol recon and assessment tool for industrial control",
+        "networks. It is read-only by default; any write or state-changing",
+        "action requires launching with --active.",
+        "",
+        "Current mode: " + mode,
+        "",
+        "--- Main menu ---",
+        "",
+        "1. Network Discovery",
+        "     Find live hosts on the local segment. Passive listens",
+        "     (broadcast/multicast, promiscuous) transmit nothing and stay",
+        "     available in safe mode. Active techniques (ARP, ICMP, SYN",
+        "     scans) put packets on the wire and need --active.",
+        "",
+        "2. Protocol Modules",
+        "     Speak directly to controllers over Modbus, S7comm (Siemens),",
+        "     EtherNet/IP (CIP), DNP3, BACnet/IP, SNMP, and IEC 60870-5-104.",
+        "     Each module leads with read-only recon. Writes/control are",
+        "     opt-in and labeled: Modbus writes, the S7 DB/M/Q writes and",
+        "     STOP/START, and the IEC 104 C_SC/C_DC/C_SE commands.",
+        "",
+        "3. Auto-Fingerprint",
+        "     Point it at one IP: it connect-scans the OT ports, then runs",
+        "     each matching module's read-only recon and folds the result",
+        "     into the Asset Register. Never writes - safe in any mode.",
+        "",
+        "4. Asset Register",
+        "     The in-memory inventory of hosts, open ports, and services",
+        "     collected this session. View it, or export to CSV / JSON.",
+        "     It is not saved to disk until you export it.",
+        "",
+        "5. Help      6. Exit",
+        "",
+        "--- Safety ---",
+        "",
+        "Legacy controllers can fault from traffic that IT gear shrugs off.",
+        "AtomICS uses conservative timeouts and one connection at a time.",
+        "Run it against the simulators (plc_sim, MOTH) before live gear.",
+        "",
+        "--- Command line ---",
+        "",
+        "  --active      enable write / state-changing operations",
+        "  --readonly    hard override: keep writes blocked even with --active",
+        "  --log         write a session log beside the script",
+        "  --update-oui  download a MAC-vendor (OUI) database, then exit",
+        "  -h / --help   full command-line help",
+        "",
+        "--- About ---",
+        "",
+        "AtomICS was vibe-coded by Mike Holcomb (UtilSec, LLC).",
+        "More OT/ICS security resources: https://www.utilsec.com",
+        "",
+    ]
+    for ln in lines:
+        print(ln)
+    for _dl in DISCLAIMER.splitlines():
+        print("  " + _dl)
+    print("")
+    input("Press Enter to return to the main menu: ")
+
+
+# ============================================================
+#  AUTO-FINGERPRINT  (read-only host interrogation)
+# ============================================================
+# Point AtomICS at a single IP: it connect-scans the OT service ports (plus a
+# direct UDP probe for SNMP and BACnet, which can't be TCP-connect-scanned), then
+# runs each matching protocol module's READ-ONLY recon against whatever answers,
+# folding the result into the Asset Register in one pass. It never writes or sends
+# a control command in any mode - it is pure reconnaissance, so it stays available
+# in safe mode. Ports are probed one connection at a time to stay gentle on the
+# segment.
+
+# (tcp_port, service label) probed in order; each is a single connect attempt.
+AUTOFP_TCP = [
+    (502,   "Modbus TCP"),
+    (102,   "S7comm / ISO-TSAP (Siemens)"),
+    (44818, "EtherNet/IP (explicit / CIP)"),
+    (20000, "DNP3"),
+    (2404,  "IEC 60870-5-104"),
+]
+
+
+def _port_open(ip, port, timeout=1.0):
+    """Gentle single TCP connect test. True if the port accepts a connection."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            return s.connect_ex((ip, port)) == 0
+    except Exception:
+        return False
+
+
+def _autofp_modbus(ip):
+    if not MODBUS_AVAILABLE:
+        echo("    [i] 502 open but pymodbus not installed - skipping Modbus recon.")
+        return
+    client = connect_to_modbus(ip, readonly=True)
+    if not client:
+        return
+    try:
+        asset_update(ip, protocol="Modbus TCP", source="AutoFP")
+        read_device_identity(client, ip)
+    finally:
+        client.close()
+
+
+def _autofp_s7(ip):
+    if not S7_AVAILABLE:
+        echo("    [i] 102 open but python-snap7 not installed - skipping S7 recon.")
+        return
+    client, rack, slot = _s7_autoprobe(ip, S7_DEFAULT_PORT)
+    if not client:
+        echo("    [i] 102 open but no rack/slot combo connected.")
+        return
+    try:
+        asset_update(ip, protocol="S7comm", vendor="Siemens", source="AutoFP")
+        s7_cpu_info(client, ip)
+        s7_order_code(client, ip)
+    finally:
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+
+def _autofp_iec104(ip):
+    conn = _Iec104Conn(ip, IEC104_DEFAULT_PORT, 1)
+    try:
+        conn.connect()
+        if conn.startdt():
+            asset_update(ip, protocol="IEC 104", source="AutoFP")
+            echo("    [check] IEC 104 STARTDT confirmed (CA=1 assumed).")
+        else:
+            echo("    [i] 2404 open but no IEC 104 STARTDT reply.")
+    except Exception as e:
+        echo(f"    [i] IEC 104 probe failed: {e}")
+    finally:
+        conn.stopdt()
+        conn.close()
+
+
+def _autofp_snmp(ip):
+    if not SNMP_AVAILABLE:
+        echo("    [i] pysnmp not installed - skipping SNMP probe.")
+        return
+    try:
+        ok, _res = snmp_get(ip, SNMP_DEFAULT_RO, 1, SNMP_SYSDESCR_OID, SNMP_DEFAULT_PORT)
+    except Exception:
+        ok = False
+    if not ok:
+        echo(f"    [-] No SNMP reply with community '{SNMP_DEFAULT_RO}' (v2c).")
+        return
+
+    # 161 answered the default read community - a finding in its own right.
+    asset_update(ip, ports={161: "SNMP"}, protocol="SNMP", source="AutoFP")
+    echo(f"    [!] SNMP answers default community '{SNMP_DEFAULT_RO}' (v2c) - read access, no auth.")
+
+    # Pull the system identity and fold it into the Asset Register. The summary
+    # prints to screen as before AND returns the fields it collected, so there
+    # is no second round of queries.
+    fields = snmp_summary(ip, SNMP_DEFAULT_RO, 1, SNMP_DEFAULT_PORT, "2c")
+    descr = (fields.get("Description") or "").strip()
+    name = (fields.get("Name") or "").strip()
+    location = (fields.get("Location") or "").strip()
+    objid = (fields.get("Object ID") or "").strip()
+    vendor = _snmp_vendor_name(objid) if objid else None
+
+    # sysDescr is the richest line (vendor/model/order code/firmware); fall back
+    # to the decoded enterprise if the device withholds a description.
+    if descr:
+        version_line = f"SNMP sysDescr: {descr}"
+    elif fields.get("Enterprise"):
+        version_line = f"SNMP enterprise: {fields['Enterprise']}"
+    else:
+        version_line = None
+
+    asset_update(ip, source="AutoFP",
+                 hostname=(name or None),
+                 vendor=(vendor or None),
+                 version=version_line)
+
+    folded = []
+    if vendor:
+        folded.append(f"vendor={vendor}")
+    if name:
+        folded.append(f"sysName={name}")
+    if location:
+        folded.append(f"location={location}")
+    if folded:
+        echo("    [+] SNMP identity -> Asset Register: " + ", ".join(folded))
+    log(f"AUTOFP_SNMP ip={ip} vendor={vendor!r} name={name!r} "
+        f"descr={descr[:100]!r}")
+
+
+def _valid_target(host):
+    """True if `host` is a usable single target: an IP literal or a resolvable name.
+
+    Sends nothing to the target - it only parses the literal or asks the local
+    resolver - so a fat-fingered value (e.g. 'asf') is caught before any scan or
+    connect runs against it. An IP literal is accepted without a lookup, so this
+    still works on an isolated segment with no DNS.
+    """
+    host = (host or "").strip()
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except (socket.gaierror, UnicodeError, OSError):
+        return False
+
+
+def auto_fingerprint(args):
+    """Read-only one-shot interrogation of a single host across OT protocols."""
+    ip = args.ip or input("Target IP to fingerprint: ").strip()
+    if not ip:
+        echo("No IP provided.")
+        return
+    if not _valid_target(ip):
+        echo(f"[x] '{ip}' is not a valid IP address or resolvable hostname.")
+        log(f"AUTOFP_INVALID_TARGET {ip!r}")
+        return
+    bar = "=" * 60
+    echo(f"\n{bar}")
+    echo(f" AUTO-FINGERPRINT  {ip}   (read-only)")
+    echo(bar)
+    echo(" Probing OT service ports (one connection at a time)...")
+    log(f"AUTOFP start ip={ip}")
+
+    open_ports = []
+    for port, label in AUTOFP_TCP:
+        if _port_open(ip, port):
+            echo(f"  [+] {port}/tcp open   - {label}")
+            asset_update(ip, ports={port: label}, source="AutoFP")
+            open_ports.append(port)
+        else:
+            echo(f"  [-] {port}/tcp closed/filtered")
+
+    # Dispatch read-only recon per open TCP port.
+    if 502 in open_ports:
+        echo("\n--- Modbus (TCP/502) ---")
+        _autofp_modbus(ip)
+    if 102 in open_ports:
+        echo("\n--- S7comm (TCP/102) ---")
+        _autofp_s7(ip)
+    if 44818 in open_ports:
+        echo("\n--- EtherNet/IP (TCP/44818) ---")
+        enip_recon(ip, ENIP_DEFAULT_PORT)
+    if 20000 in open_ports:
+        echo("\n--- DNP3 (TCP/20000) ---")
+        dnp3_link_status(ip, DNP3_DEFAULT_PORT, 1024, 1)
+    if 2404 in open_ports:
+        echo("\n--- IEC 60870-5-104 (TCP/2404) ---")
+        _autofp_iec104(ip)
+
+    # UDP services can't be connect-scanned, so probe them directly.
+    echo("\n--- UDP probes (SNMP/161, BACnet/47808) ---")
+    _autofp_snmp(ip)
+    try:
+        bacnet_whois(BACNET_DEFAULT_PORT, target=ip)
+    except Exception as e:
+        echo(f"    [i] BACnet probe failed: {e}")
+
+    echo(f"\n{bar}")
+    echo(" Auto-fingerprint complete. Open the Asset Register (main menu) for the")
+    echo(" merged result; export it to CSV/JSON to keep it.")
+    echo(bar)
+    log(f"AUTOFP done ip={ip} open={open_ports}")
+
+
 def protocol_menu(args):
     while True:
-        print("\n=== AtomICS - Main Menu ===")
-        print("    Mode: " + ("SAFE (read-only)" if args.readonly
-                              else "ACTIVE (writes enabled)"))
+        print("\n" + _menu_title("Main Menu"))
         print("")
         print("1. Network Discovery")
-        print("2. Protocol Modules (Modbus, S7, EtherNet/IP, DNP3, BACnet, SNMP)")
-        print(f"3. Asset Register ({_asset_summary_label()})")
-        print("4. Exit")
+        print("2. Protocol Modules")
+        print("3. Auto-Fingerprint")
+        print(f"4. Asset Register ({_asset_summary_label()})")
+        print("5. Help")
+        print("6. Exit")
         choice = input("\nSelect an option: ").strip()
 
         if choice == "1":
@@ -5267,8 +6381,12 @@ def protocol_menu(args):
         elif choice == "2":
             protocol_modules_menu(args)
         elif choice == "3":
-            asset_register_session()
+            auto_fingerprint(args)
         elif choice == "4":
+            asset_register_session()
+        elif choice == "5":
+            help_menu(args)
+        elif choice == "6":
             log("SESSION_END")
             break
         else:
@@ -5311,6 +6429,7 @@ if __name__ == "__main__":
     # script or a shell alias can pin a jump box to read-only and no argument
     # added later can quietly undo it.
     args.readonly = (not args.active) or args.readonly
+    SESSION_READONLY = args.readonly
 
     if args.log:
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -5318,16 +6437,13 @@ if __name__ == "__main__":
         log("LOGGING_ENABLED")
 
     echo("=" * 60)
-    echo(" AtomICS - OT/ICS Recon & Assessment Console (v0.1)")
-    echo("=" * 60)
-    for _dl in DISCLAIMER.splitlines():
-        echo(" " + _dl)
+    echo(" AtomICS - OT/ICS Recon & Assessment Console (v0.4.0)")
     echo("=" * 60)
     if args.readonly:
-        echo(" MODE: SAFE - read-only. Writes and state-changing actions are")
-        echo("       blocked. Relaunch with --active to enable them.")
+        for _dl in DISCLAIMER.splitlines():
+            echo(" " + _dl)
         if args.active:
-            echo("       (--active was overridden by --readonly)")
+            echo(" (--active was overridden by --readonly; writes stay blocked)")
     else:
         echo(" !! MODE: ACTIVE - writes and state-changing actions are ENABLED !!")
         echo("    This session can change live device state. Writes execute")

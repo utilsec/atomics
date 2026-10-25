@@ -1,0 +1,28 @@
+# MAC vendor databases: fetched with `atomics.py --update-oui` / `AtomICS.ps1 -UpdateOui`,
+# not redistributed with this repo
+oui.csv
+oui.txt
+manuf
+maclookup.csv
+mac-vendors-export.csv
+
+# AtomICS output: asset-register exports, passive-listen captures, SNMP dumps and
+# session logs. They hold IP/MAC inventory, device identities and network topology,
+# so they never belong in a public repo.
+atomics_*.csv
+atomics_*.json
+atomics_*.txt
+atomics_*.log
+atomics_ps_*.csv
+atomics_ps_*.json
+atomics_ps_*.txt
+atomics_ps_*.log
+
+# Python
+__pycache__/
+*.py[cod]
+
+# OS clutter
+Thumbs.db
+desktop.ini
+.DS_Store
